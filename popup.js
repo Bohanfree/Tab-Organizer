@@ -1,6 +1,7 @@
 const tabCount = document.querySelector("#tabCount");
 const instructions = document.querySelector("#instructions");
 const useAi = document.querySelector("#useAi");
+const organizeModeButtons = [...document.querySelectorAll("[data-mode]")];
 const apiBaseUrl = document.querySelector("#apiBaseUrl");
 const apiKey = document.querySelector("#apiKey");
 const model = document.querySelector("#model");
@@ -18,13 +19,14 @@ const DEFAULT_INSTRUCTIONS = `依据页面标题和 URL，按主题对标签页�
 保留现有分组，若未归类标签不适合归入现有分组，则为其新建分组。
 新建分组标签页名用 emoji + 中文，例如：💻 开发资料`;
 let currentWindowId = null;
+let currentOrganizeMode = "ungrouped";
 
 init();
 
 async function init() {
-  const [{ apiBaseUrl: savedBaseUrl, apiKey: savedKey, model: savedModel, useAi: savedUseAi, instructions: savedInstructions }, currentWindow] =
+  const [{ apiBaseUrl: savedBaseUrl, apiKey: savedKey, model: savedModel, useAi: savedUseAi, instructions: savedInstructions, organizeMode }, currentWindow] =
     await Promise.all([
-      chrome.storage.local.get(["apiBaseUrl", "apiKey", "model", "useAi", "instructions"]),
+      chrome.storage.local.get(["apiBaseUrl", "apiKey", "model", "useAi", "instructions", "organizeMode"]),
       chrome.windows.getCurrent({ populate: true })
     ]);
 
@@ -35,6 +37,7 @@ async function init() {
   apiKey.value = savedKey || "";
   model.value = savedModel || "gpt-4o-mini";
   useAi.checked = Boolean(savedUseAi);
+  setOrganizeMode(organizeMode || "ungrouped");
   instructions.value = savedInstructions || DEFAULT_INSTRUCTIONS;
   tabCount.textContent = `${tabs.length} 个标签页，当前窗口`;
 }
@@ -43,13 +46,20 @@ settingsToggle.addEventListener("click", () => {
   settings.classList.toggle("hidden");
 });
 
+for (const button of organizeModeButtons) {
+  button.addEventListener("click", () => {
+    setOrganizeMode(button.dataset.mode);
+  });
+}
+
 saveSettings.addEventListener("click", async () => {
   await chrome.storage.local.set({
     apiBaseUrl: normalizeBaseUrl(apiBaseUrl.value),
     apiKey: apiKey.value.trim(),
     model: model.value.trim() || "gpt-4o-mini",
     useAi: useAi.checked,
-    instructions: instructions.value.trim() || DEFAULT_INSTRUCTIONS
+    instructions: instructions.value.trim() || DEFAULT_INSTRUCTIONS,
+    organizeMode: getOrganizeMode()
   });
   showMessage("设置已保存。");
 });
@@ -66,8 +76,13 @@ organize.addEventListener("click", async () => {
       model: model.value.trim() || "gpt-4o-mini",
       useAi: useAi.checked,
       instructions: instructions.value.trim() || DEFAULT_INSTRUCTIONS,
+      organizeMode: getOrganizeMode(),
       windowId: currentWindowId
     };
+
+    if (settings.useAi && settings.apiKey) {
+      await ensureApiPermission(settings.apiBaseUrl);
+    }
 
     await chrome.storage.local.set(settings);
 
@@ -83,15 +98,7 @@ organize.addEventListener("click", async () => {
       throw new Error(response?.error || "整理失败");
     }
 
-    const groupText = response.groups
-      .map((group) => `${group.title}（${group.count}）`)
-      .join("、");
-    const sourceText = response.source === "model" ? "模型分组" : "本地规则";
-    const warningText = response.warning ? `；${response.warning}` : "";
-    const debugText = response.debug
-      ? `；候选 ${response.debug.proposedGroupCount} 组，失败 ${response.debug.failedGroupCount} 组，跳过 ${response.debug.skippedTabCount || 0} 个`
-      : "";
-    showMessage(`已整理 ${response.tabCount} 个标签（${sourceText}${warningText}${debugText}）：${groupText || "未能创建标签组"}`);
+    showResult(response);
   } catch (error) {
     showMessage(error.message, true);
   } finally {
@@ -106,8 +113,79 @@ function showMessage(message, isError = false) {
   result.classList.toggle("error", isError);
 }
 
+function showResult(response) {
+  const groupText = response.groups
+    .map((group) => `${group.title}（${group.count}）`)
+    .join("、");
+  const sourceText = response.source === "model" ? "模型" : "本地规则";
+  const modeText = response.organizeMode === "all" ? "全部重整" : "未归类";
+  const detailText = response.debug
+    ? `范围：${modeText}；来源：${sourceText}；候选 ${response.debug.proposedGroupCount} 组，失败 ${response.debug.failedGroupCount} 组，跳过 ${response.debug.skippedTabCount || 0} 个`
+    : `范围：${modeText}；来源：${sourceText}`;
+
+  result.replaceChildren();
+
+  const title = document.createElement("strong");
+  title.textContent = response.groups.length
+    ? `已整理 ${response.groups.reduce((sum, group) => sum + group.count, 0)} 个标签`
+    : response.warning || "没有需要整理的标签";
+  result.append(title);
+
+  if (groupText) {
+    const summary = document.createElement("div");
+    summary.textContent = groupText;
+    result.append(summary);
+  }
+
+  const details = document.createElement("details");
+  const detailsSummary = document.createElement("summary");
+  detailsSummary.textContent = "详情";
+  const detailsBody = document.createElement("div");
+  detailsBody.textContent = [detailText, response.warning].filter(Boolean).join("；");
+  details.append(detailsSummary, detailsBody);
+  result.append(details);
+
+  result.classList.add("visible");
+  result.classList.remove("error");
+}
+
 function normalizeBaseUrl(value) {
   return (value.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
+}
+
+function getOrganizeMode() {
+  return currentOrganizeMode;
+}
+
+function setOrganizeMode(value) {
+  const mode = value === "all" ? "all" : "ungrouped";
+  currentOrganizeMode = mode;
+  for (const button of organizeModeButtons) {
+    const selected = button.dataset.mode === mode;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-checked", String(selected));
+  }
+}
+
+async function ensureApiPermission(baseUrl) {
+  const origin = getOriginPattern(baseUrl);
+  const hasPermission = await chrome.permissions.contains({ origins: [origin] });
+  if (hasPermission) {
+    return;
+  }
+
+  const granted = await chrome.permissions.request({ origins: [origin] });
+  if (!granted) {
+    throw new Error("未授权访问模型接口，已取消模型分组");
+  }
+}
+
+function getOriginPattern(baseUrl) {
+  try {
+    return `${new URL(baseUrl).origin}/*`;
+  } catch {
+    throw new Error("API Base URL 格式不正确");
+  }
 }
 
 function sendMessageWithTimeout(message, timeoutMs) {

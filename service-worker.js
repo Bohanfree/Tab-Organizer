@@ -22,36 +22,44 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 async function organizeTabs(options = {}) {
   const { windowId } = options;
+  const organizeMode = options.organizeMode === "all" ? "all" : "ungrouped";
   const tabs = await chrome.tabs.query(Number.isInteger(windowId) ? { windowId } : { lastFocusedWindow: true });
   const eligibleTabs = tabs.filter(isOrganizableTab);
   const skippedTabs = tabs.filter((tab) => !isOrganizableTab(tab));
-  const existingGroups = await getExistingGroups(windowId);
+  const existingGroups = organizeMode === "all" ? new Map() : await getExistingGroups(windowId);
   const ungroupedTabs = eligibleTabs.filter((tab) => tab.groupId === TAB_GROUP_ID_NONE);
+  const targetTabs = organizeMode === "all" ? eligibleTabs : ungroupedTabs;
 
   if (eligibleTabs.length === 0) {
     return {
       tabCount: 0,
       groups: [],
       source: "local",
+      organizeMode,
       warning: "没有拿到可整理的网页标签。请确认当前窗口有普通网页标签，且标签不是固定标签、chrome:// 页面或扩展页面。",
       debug: { proposedGroupCount: 0, failedGroupCount: 0, skippedTabCount: skippedTabs.length }
     };
   }
 
-  if (ungroupedTabs.length === 0) {
+  if (targetTabs.length === 0) {
     return {
       tabCount: eligibleTabs.length,
       groups: [],
       source: "local",
+      organizeMode,
       warning: "未发现未归类标签，已保留现有分组",
       debug: { proposedGroupCount: 0, failedGroupCount: 0, skippedTabCount: skippedTabs.length }
     };
   }
 
-  const grouping = await buildGroups(ungroupedTabs, options, existingGroups, eligibleTabs);
-  const groups = coerceUsefulGroups(grouping.groups, ungroupedTabs);
+  const grouping = await buildGroups(targetTabs, options, existingGroups, eligibleTabs);
+  const groups = coerceUsefulGroups(grouping.groups, targetTabs);
   const appliedGroups = [];
   const failedGroups = [];
+
+  if (organizeMode === "all") {
+    await ungroupTabs(targetTabs);
+  }
 
   for (const [index, group] of groups.entries()) {
     const tabIds = group.tabIds.filter((tabId) => eligibleTabs.some((tab) => tab.id === tabId));
@@ -75,7 +83,7 @@ async function organizeTabs(options = {}) {
 
   if (appliedGroups.length === 0 && eligibleTabs.length > 0) {
     try {
-      const fallback = buildCatchAllGroup(ungroupedTabs)[0];
+      const fallback = buildCatchAllGroup(targetTabs)[0];
       const createdGroup = await createTabGroup({
         tabIds: fallback.tabIds,
         title: fallback.title,
@@ -84,7 +92,7 @@ async function organizeTabs(options = {}) {
       });
       appliedGroups.push(createdGroup);
     } catch (error) {
-      failedGroups.push({ title: "未分类", count: ungroupedTabs.length, error: error.message });
+      failedGroups.push({ title: "未分类", count: targetTabs.length, error: error.message });
     }
   }
 
@@ -92,6 +100,7 @@ async function organizeTabs(options = {}) {
     tabCount: eligibleTabs.length,
     groups: appliedGroups,
     source: grouping.source,
+    organizeMode,
     warning: grouping.warning || (failedGroups.length ? `创建标签组失败：${failedGroups[0].error}` : ""),
     debug: {
       proposedGroupCount: groups.length,
@@ -305,6 +314,19 @@ async function createTabGroup({ tabIds, title, existingGroupId, color, windowId 
   }
 
   return { title: cleanGroupTitle(isExistingGroup ? title : ensureTitleEmoji(title)), count: tabIds.length };
+}
+
+async function ungroupTabs(tabs) {
+  const groupedTabIds = tabs
+    .filter((tab) => Number.isInteger(tab.groupId) && tab.groupId !== TAB_GROUP_ID_NONE)
+    .map((tab) => tab.id)
+    .filter(Number.isInteger);
+
+  if (!groupedTabIds.length) {
+    return;
+  }
+
+  await chrome.tabs.ungroup(groupedTabIds);
 }
 
 function normalizeGroups(groups, tabs, existingGroups = new Map()) {

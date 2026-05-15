@@ -98,6 +98,37 @@ input:focus {
   margin-left: 24px;
 }
 
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #d8e0df;
+  border-radius: 8px;
+  background: #edf3f2;
+}
+
+.segment {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: #4a545d;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.segment.active {
+  color: #123f52;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(21, 91, 117, 0.14);
+}
+
 button {
   min-height: 36px;
   border: 0;
@@ -143,6 +174,20 @@ button:disabled {
   color: #1e4f2f;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.result strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.result details {
+  margin-top: 6px;
+}
+
+.result summary {
+  cursor: pointer;
+  color: #34624b;
 }
 
 .result.error {

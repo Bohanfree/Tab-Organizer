@@ -2,9 +2,9 @@
   "manifest_version": 3,
   "name": "Atlas Tab Organizer",
   "description": "Auto-organize Chrome tabs into useful groups with optional AI instructions.",
-  "version": "0.5.0",
+  "version": "0.6.1",
   "permissions": ["tabs", "tabGroups", "storage", "windows"],
-  "host_permissions": ["<all_urls>"],
+  "optional_host_permissions": ["<all_urls>"],
   "action": {
     "default_title": "Organize tabs",
     "default_popup": "popup.html"

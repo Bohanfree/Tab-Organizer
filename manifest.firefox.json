@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Atlas Tab Organizer",
+  "description": "Auto-organize browser tabs into useful groups with optional AI instructions.",
+  "version": "0.7.0",
+  "permissions": ["tabs", "tabGroups", "storage", "windows"],
+  "optional_host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "Organize tabs",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "scripts": ["service-worker.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tab-organizer@bohanfree.github.io",
+      "strict_min_version": "139.0"
+    }
+  }
+}

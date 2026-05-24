@@ -11,6 +11,8 @@ const settings = document.querySelector("#settings");
 const settingsToggle = document.querySelector("#settingsToggle");
 const saveSettings = document.querySelector("#saveSettings");
 const version = document.querySelector("#version");
+const extensionApi = globalThis.browser || globalThis.chrome;
+const usesPromiseApi = typeof globalThis.browser !== "undefined";
 const POPUP_TIMEOUT_MS = 18000;
 const DEFAULT_INSTRUCTIONS = `依据页面标题和 URL，按主题对标签页进行分组；每组内保持清晰、合理的排序。
 
@@ -26,13 +28,13 @@ init();
 async function init() {
   const [{ apiBaseUrl: savedBaseUrl, apiKey: savedKey, model: savedModel, useAi: savedUseAi, instructions: savedInstructions, organizeMode }, currentWindow] =
     await Promise.all([
-      chrome.storage.local.get(["apiBaseUrl", "apiKey", "model", "useAi", "instructions", "organizeMode"]),
-      chrome.windows.getCurrent({ populate: true })
+      extensionApi.storage.local.get(["apiBaseUrl", "apiKey", "model", "useAi", "instructions", "organizeMode"]),
+      extensionApi.windows.getCurrent({ populate: true })
     ]);
 
   currentWindowId = currentWindow.id;
   const tabs = currentWindow.tabs || [];
-  version.textContent = `v${chrome.runtime.getManifest().version}`;
+  version.textContent = `v${extensionApi.runtime.getManifest().version}`;
   apiBaseUrl.value = savedBaseUrl || "https://api.openai.com/v1";
   apiKey.value = savedKey || "";
   model.value = savedModel || "gpt-4o-mini";
@@ -53,7 +55,7 @@ for (const button of organizeModeButtons) {
 }
 
 saveSettings.addEventListener("click", async () => {
-  await chrome.storage.local.set({
+  await extensionApi.storage.local.set({
     apiBaseUrl: normalizeBaseUrl(apiBaseUrl.value),
     apiKey: apiKey.value.trim(),
     model: model.value.trim() || "gpt-4o-mini",
@@ -84,7 +86,7 @@ organize.addEventListener("click", async () => {
       await ensureApiPermission(settings.apiBaseUrl);
     }
 
-    await chrome.storage.local.set(settings);
+    await extensionApi.storage.local.set(settings);
 
     const response = await sendMessageWithTimeout(
       {
@@ -169,12 +171,12 @@ function setOrganizeMode(value) {
 
 async function ensureApiPermission(baseUrl) {
   const origin = getOriginPattern(baseUrl);
-  const hasPermission = await chrome.permissions.contains({ origins: [origin] });
+  const hasPermission = await extensionApi.permissions.contains({ origins: [origin] });
   if (hasPermission) {
     return;
   }
 
-  const granted = await chrome.permissions.request({ origins: [origin] });
+  const granted = await extensionApi.permissions.request({ origins: [origin] });
   if (!granted) {
     throw new Error("未授权访问模型接口，已取消模型分组");
   }
@@ -194,9 +196,22 @@ function sendMessageWithTimeout(message, timeoutMs) {
       reject(new Error(`整理超时：后台超过 ${Math.round(timeoutMs / 1000)} 秒未响应，请刷新扩展或关闭模型分组重试`));
     }, timeoutMs);
 
-    chrome.runtime.sendMessage(message, (response) => {
+    if (usesPromiseApi) {
+      extensionApi.runtime.sendMessage(message)
+        .then((response) => {
+          clearTimeout(timer);
+          resolve(response);
+        })
+        .catch((error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+      return;
+    }
+
+    extensionApi.runtime.sendMessage(message, (response) => {
       clearTimeout(timer);
-      const runtimeError = chrome.runtime.lastError;
+      const runtimeError = extensionApi.runtime.lastError;
       if (runtimeError) {
         reject(new Error(runtimeError.message));
         return;

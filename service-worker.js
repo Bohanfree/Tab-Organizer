@@ -1,6 +1,8 @@
 const GROUP_COLORS = ["blue", "green", "yellow", "red", "purple", "cyan", "orange", "pink", "grey"];
 const MODEL_TIMEOUT_MS = 12000;
 const TAB_GROUP_ID_NONE = -1;
+const extensionApi = globalThis.browser || globalThis.chrome;
+const usesPromiseApi = typeof globalThis.browser !== "undefined";
 const DEFAULT_INSTRUCTIONS = `依据页面标题和 URL，按主题对标签页进行分组；每组内保持清晰、合理的排序。
 
 请勿依据最近访问时间或互动时间排序。
@@ -8,14 +10,20 @@ const DEFAULT_INSTRUCTIONS = `依据页面标题和 URL，按主题对标签页�
 保留现有分组，若未归类标签不适合归入现有分组，则为其新建分组。
 新建分组标签页名用 emoji + 中文，例如：💻 开发资料`;
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+extensionApi.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "ORGANIZE_TABS") {
     return false;
   }
 
-  organizeTabs(message.payload)
-    .then((result) => sendResponse({ ok: true, ...result }))
-    .catch((error) => sendResponse({ ok: false, error: error.message }));
+  const responsePromise = organizeTabs(message.payload)
+    .then((result) => ({ ok: true, ...result }))
+    .catch((error) => ({ ok: false, error: error.message }));
+
+  if (usesPromiseApi) {
+    return responsePromise;
+  }
+
+  responsePromise.then(sendResponse);
 
   return true;
 });
@@ -23,7 +31,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 async function organizeTabs(options = {}) {
   const { windowId } = options;
   const organizeMode = options.organizeMode === "all" ? "all" : "ungrouped";
-  const tabs = await chrome.tabs.query(Number.isInteger(windowId) ? { windowId } : { lastFocusedWindow: true });
+  const tabs = await extensionApi.tabs.query(Number.isInteger(windowId) ? { windowId } : { lastFocusedWindow: true });
   const eligibleTabs = tabs.filter(isOrganizableTab);
   const skippedTabs = tabs.filter((tab) => !isOrganizableTab(tab));
   const existingGroups = organizeMode === "all" ? new Map() : await getExistingGroups(windowId);
@@ -111,7 +119,7 @@ async function organizeTabs(options = {}) {
 }
 
 async function buildGroups(tabs, options, existingGroups, allTabs) {
-  const saved = await chrome.storage.local.get(["apiBaseUrl", "apiKey", "model"]);
+  const saved = await extensionApi.storage.local.get(["apiBaseUrl", "apiKey", "model"]);
   const apiBaseUrl = options.apiBaseUrl || saved.apiBaseUrl;
   const apiKey = options.apiKey || saved.apiKey;
   const model = options.model || saved.model;
@@ -304,9 +312,9 @@ async function createTabGroup({ tabIds, title, existingGroupId, color, windowId 
     groupOptions.createProperties = { windowId };
   }
 
-  const groupId = await chrome.tabs.group(groupOptions);
+  const groupId = await extensionApi.tabs.group(groupOptions);
   if (!isExistingGroup) {
-    await chrome.tabGroups.update(groupId, {
+    await extensionApi.tabGroups.update(groupId, {
       title: cleanGroupTitle(ensureTitleEmoji(title)),
       color,
       collapsed: false
@@ -326,7 +334,7 @@ async function ungroupTabs(tabs) {
     return;
   }
 
-  await chrome.tabs.ungroup(groupedTabIds);
+  await extensionApi.tabs.ungroup(groupedTabIds);
 }
 
 function normalizeGroups(groups, tabs, existingGroups = new Map()) {
@@ -361,7 +369,7 @@ function normalizeGroups(groups, tabs, existingGroups = new Map()) {
 async function getExistingGroups(windowId) {
   try {
     const query = Number.isInteger(windowId) ? { windowId } : {};
-    const groups = await chrome.tabGroups.query(query);
+    const groups = await extensionApi.tabGroups.query(query);
     return new Map(
       groups.map((group) => [
         group.id,

@@ -4,6 +4,7 @@
 
 ## 功能
 
+- 支持 Chrome 和 Firefox
 - 一键整理当前窗口标签页
 - 支持用户输入整理要求
 - 默认整理规则：按标题和 URL 的主题分组，保留已有分组，只整理未归类标签，新建分组名使用 emoji + 中文
@@ -14,13 +15,30 @@
 - 模型接口权限按 API Base URL 动态申请，不默认请求所有网站访问权限
 - API Key 仅保存在本机 `chrome.storage.local`
 
-## 安装
+## Chrome 安装
 
 1. 打开 Chrome：`chrome://extensions`
 2. 开启右上角“开发者模式”
 3. 点击“加载已解压的扩展程序”
 4. 选择本文件夹：`Tab-Organizer`
 5. 点击工具栏扩展图标，输入整理要求后点击“整理当前窗口标签”
+
+## Firefox 临时安装
+
+Firefox 使用自己的后台脚本 manifest，因此需要先生成 Firefox 版本目录：
+
+```bash
+./scripts/build-firefox.sh
+```
+
+然后打开 Firefox：
+
+1. 进入 `about:debugging#/runtime/this-firefox`
+2. 点击“临时载入附加组件”
+3. 选择 `dist/firefox/manifest.json`
+4. 点击工具栏扩展图标，开始整理当前窗口标签页
+
+Firefox 需要支持原生标签组和 `tabGroups` WebExtension API。建议使用 Firefox 139 或更新版本。
 
 ## 整理范围
 

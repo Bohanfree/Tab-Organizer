@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atlas Tab Organizer</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>标签整理 <span id="version" class="version"></span></h1>
+          <p id="tabCount">读取当前窗口中...</p>
+        </div>
+        <button id="settingsToggle" class="iconButton" type="button" title="设置" aria-label="设置">
+          <span aria-hidden="true">设置</span>
+        </button>
+      </header>
+
+      <section class="panel">
+        <label for="instructions">整理要求</label>
+        <textarea id="instructions" rows="6" placeholder="依据页面标题和 URL，按主题对标签页进行分组；每组内保持清晰、合理的排序。&#10;&#10;请勿依据最近访问时间或互动时间排序。&#10;&#10;保留现有分组，若未归类标签不适合归入现有分组，则为其新建分组。&#10;新建分组标签页名用 emoji + 中文，例如：💻 开发资料"></textarea>
+      </section>
+
+      <section class="panel compact">
+        <label class="switch">
+          <input id="useAi" type="checkbox" />
+          <span>使用模型智能分组</span>
+        </label>
+        <p class="hint">兼容 OpenAI 格式的中转站；未配置时自动使用本地规则。</p>
+      </section>
+
+      <section class="panel">
+        <label>整理范围</label>
+        <div class="segmented" role="radiogroup" aria-label="整理范围">
+          <button class="segment active" type="button" data-mode="ungrouped" role="radio" aria-checked="true">未归类</button>
+          <button class="segment" type="button" data-mode="all" role="radio" aria-checked="false">全部重整</button>
+        </div>
+      </section>
+
+      <section id="settings" class="panel hidden">
+        <label for="apiBaseUrl">API Base URL</label>
+        <input id="apiBaseUrl" type="text" placeholder="https://api.example.com/v1" />
+        <label for="apiKey">API Key</label>
+        <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" />
+        <label for="model">模型</label>
+        <input id="model" type="text" value="gpt-4o-mini" />
+        <button id="saveSettings" class="secondary" type="button">保存设置</button>
+      </section>
+
+      <button id="organize" class="primary" type="button">整理当前窗口标签</button>
+
+      <section id="result" class="result" aria-live="polite"></section>
+    </main>
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

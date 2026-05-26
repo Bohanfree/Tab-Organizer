@@ -23,7 +23,7 @@
 4. 选择本文件夹：`Tab-Organizer`
 5. 点击工具栏扩展图标，输入整理要求后点击“整理当前窗口标签”
 
-## Firefox 临时安装
+## Firefox / Zen 临时安装
 
 Firefox 使用自己的后台脚本 manifest，因此需要先生成 Firefox 版本目录：
 
@@ -31,14 +31,16 @@ Firefox 使用自己的后台脚本 manifest，因此需要先生成 Firefox 版
 ./scripts/build-firefox.sh
 ```
 
-然后打开 Firefox：
+然后打开 Firefox 或 Zen：
 
 1. 进入 `about:debugging#/runtime/this-firefox`
 2. 点击“临时载入附加组件”
-3. 选择 `dist/firefox/manifest.json`
+3. 优先选择 `firefox-unpacked/manifest.json`
 4. 点击工具栏扩展图标，开始整理当前窗口标签页
 
 Firefox 需要支持原生标签组和 `tabGroups` WebExtension API。建议使用 Firefox 139 或更新版本。
+
+如果 Zen 加载 `packages/*.zip` 时提示 `NS_ERROR_FAILURE [nsIZipReader.open]`，不要再选 zip 包，改为解压源码后直接选择 `firefox-unpacked/manifest.json`。也可以尝试使用 `packages/tab-organizer-firefox-v0.7.1.xpi`，但临时调试模式下选择 unpacked manifest 最稳定。
 
 ## 整理范围
 

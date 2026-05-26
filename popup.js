@@ -26,14 +26,13 @@ let currentOrganizeMode = "ungrouped";
 init();
 
 async function init() {
-  const [{ apiBaseUrl: savedBaseUrl, apiKey: savedKey, model: savedModel, useAi: savedUseAi, instructions: savedInstructions, organizeMode }, currentWindow] =
+  const [{ apiBaseUrl: savedBaseUrl, apiKey: savedKey, model: savedModel, useAi: savedUseAi, instructions: savedInstructions, organizeMode }, tabs] =
     await Promise.all([
       extensionApi.storage.local.get(["apiBaseUrl", "apiKey", "model", "useAi", "instructions", "organizeMode"]),
-      extensionApi.windows.getCurrent({ populate: true })
+      extensionApi.tabs.query({ currentWindow: true })
     ]);
 
-  currentWindowId = currentWindow.id;
-  const tabs = currentWindow.tabs || [];
+  currentWindowId = tabs[0]?.windowId ?? null;
   version.textContent = `v${extensionApi.runtime.getManifest().version}`;
   apiBaseUrl.value = savedBaseUrl || "https://api.openai.com/v1";
   apiKey.value = savedKey || "";
@@ -82,8 +81,15 @@ organize.addEventListener("click", async () => {
       windowId: currentWindowId
     };
 
-    if (settings.useAi && settings.apiKey) {
-      await ensureApiPermission(settings.apiBaseUrl);
+    const permissionRequest = settings.useAi && settings.apiKey
+      ? requestApiPermissionFromGesture(settings.apiBaseUrl)
+      : null;
+
+    if (permissionRequest) {
+      const granted = await permissionRequest;
+      if (!granted) {
+        throw new Error("未授权访问模型接口，已取消模型分组");
+      }
     }
 
     await extensionApi.storage.local.set(settings);
@@ -169,17 +175,9 @@ function setOrganizeMode(value) {
   }
 }
 
-async function ensureApiPermission(baseUrl) {
+function requestApiPermissionFromGesture(baseUrl) {
   const origin = getOriginPattern(baseUrl);
-  const hasPermission = await extensionApi.permissions.contains({ origins: [origin] });
-  if (hasPermission) {
-    return;
-  }
-
-  const granted = await extensionApi.permissions.request({ origins: [origin] });
-  if (!granted) {
-    throw new Error("未授权访问模型接口，已取消模型分组");
-  }
+  return extensionApi.permissions.request({ origins: [origin] });
 }
 
 function getOriginPattern(baseUrl) {

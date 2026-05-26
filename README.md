@@ -40,7 +40,7 @@ Firefox 使用自己的后台脚本 manifest，因此需要先生成 Firefox 版
 
 Firefox 需要支持原生标签组和 `tabGroups` WebExtension API。建议使用 Firefox 139 或更新版本。
 
-如果 Zen 加载 `packages/*.zip` 时提示 `NS_ERROR_FAILURE [nsIZipReader.open]`，不要再选 zip 包，改为解压源码后直接选择 `firefox-unpacked/manifest.json`。也可以尝试使用 `packages/tab-organizer-firefox-v0.7.1.xpi`，但临时调试模式下选择 unpacked manifest 最稳定。
+如果 Zen 加载 `packages/*.zip` 时提示 `NS_ERROR_FAILURE [nsIZipReader.open]`，不要再选 zip 包，改为解压源码后直接选择 `firefox-unpacked/manifest.json`。也可以尝试使用 `packages/tab-organizer-firefox-v0.7.2.xpi`，但临时调试模式下选择 unpacked manifest 最稳定。
 
 ## 整理范围
 

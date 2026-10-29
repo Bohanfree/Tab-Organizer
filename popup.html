@@ -49,7 +49,11 @@
         <button id="saveSettings" class="secondary" type="button">保存设置</button>
       </section>
 
-      <button id="organize" class="primary" type="button">整理当前窗口标签</button>
+      <div class="actions">
+        <button id="preview" class="secondary" type="button" disabled>预览分组</button>
+        <button id="organize" class="primary" type="button" disabled>整理当前窗口标签</button>
+      </div>
+      <button id="applyPreview" class="primary hidden" type="button">按此预览整理</button>
 
       <section id="result" class="result" aria-live="polite"></section>
     </main>

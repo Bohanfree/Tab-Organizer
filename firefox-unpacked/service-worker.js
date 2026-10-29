@@ -3,6 +3,11 @@ const MODEL_TIMEOUT_MS = 12000;
 const TAB_GROUP_ID_NONE = -1;
 const extensionApi = globalThis.browser || globalThis.chrome;
 const usesPromiseApi = typeof globalThis.browser !== "undefined";
+const supportsNativeTabGroups = Boolean(
+  extensionApi?.tabs?.group &&
+  extensionApi?.tabGroups?.query &&
+  extensionApi?.tabGroups?.update
+);
 const DEFAULT_INSTRUCTIONS = `依据页面标题和 URL，按主题对标签页进行分组；每组内保持清晰、合理的排序。
 
 请勿依据最近访问时间或互动时间排序。
@@ -10,12 +15,15 @@ const DEFAULT_INSTRUCTIONS = `依据页面标题和 URL，按主题对标签页�
 保留现有分组，若未归类标签不适合归入现有分组，则为其新建分组。
 新建分组标签页名用 emoji + 中文，例如：💻 开发资料`;
 
+const runningWindows = new Set();
+const previewStorage = extensionApi.storage.session || extensionApi.storage.local;
+
 extensionApi.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "ORGANIZE_TABS") {
+  if (!["ORGANIZE_TABS", "PREVIEW_TABS", "APPLY_PREVIEW"].includes(message?.type)) {
     return false;
   }
 
-  const responsePromise = organizeTabs(message.payload)
+  const responsePromise = handleOperation(message)
     .then((result) => ({ ok: true, ...result }))
     .catch((error) => ({ ok: false, error: error.message }));
 
@@ -28,14 +36,48 @@ extensionApi.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
+async function handleOperation(message) {
+  const options = message.payload || {};
+  if (!Number.isInteger(options.windowId)) {
+    throw new Error("请重新打开弹窗以读取当前窗口");
+  }
+  const windowId = options.windowId;
+  if (runningWindows.has(windowId)) throw new Error("当前窗口正在整理，请稍后再试");
+  runningWindows.add(windowId);
+  try {
+    const response = await organizeTabs({
+      ...options,
+      previewOnly: message.type === "PREVIEW_TABS",
+      applyPreview: message.type === "APPLY_PREVIEW"
+    });
+    if (!response.preview) {
+      await extensionApi.storage.local.set({ [`lastResult:${windowId}`]: { ...response, savedAt: Date.now() } });
+    }
+    return response;
+  } finally {
+    runningWindows.delete(windowId);
+  }
+}
+
+function tabFingerprint(tabs) {
+  return JSON.stringify(tabs.map(({ id, index, url, title, pinned, groupId }) =>
+    [id, index, url, title, Boolean(pinned), groupId ?? TAB_GROUP_ID_NONE]));
+}
+
 async function organizeTabs(options = {}) {
   const { windowId } = options;
+  const previewKey = `preview:${windowId}`;
   const organizeMode = options.organizeMode === "all" ? "all" : "ungrouped";
   const tabs = await extensionApi.tabs.query(Number.isInteger(windowId) ? { windowId } : { lastFocusedWindow: true });
   const eligibleTabs = tabs.filter(isOrganizableTab);
   const skippedTabs = tabs.filter((tab) => !isOrganizableTab(tab));
-  const existingGroups = organizeMode === "all" ? new Map() : await getExistingGroups(windowId);
-  const ungroupedTabs = eligibleTabs.filter((tab) => tab.groupId === TAB_GROUP_ID_NONE);
+  const existingGroups = !supportsNativeTabGroups || organizeMode === "all" ? new Map() : await getExistingGroups(windowId);
+  // Vivaldi may omit `groupId` altogether because it does not expose its tab
+  // stacks through the Chromium tabGroups API. In compatibility mode, every
+  // ordinary page is therefore eligible for the safe reordering fallback.
+  const ungroupedTabs = supportsNativeTabGroups
+    ? eligibleTabs.filter((tab) => !Number.isInteger(tab.groupId) || tab.groupId === TAB_GROUP_ID_NONE)
+    : eligibleTabs;
   const targetTabs = organizeMode === "all" ? eligibleTabs : ungroupedTabs;
 
   if (eligibleTabs.length === 0) {
@@ -60,13 +102,60 @@ async function organizeTabs(options = {}) {
     };
   }
 
-  const grouping = await buildGroups(targetTabs, options, existingGroups, eligibleTabs);
-  const groups = coerceUsefulGroups(grouping.groups, targetTabs);
+  let grouping;
+  if (options.applyPreview) {
+    const saved = (await previewStorage.get(previewKey))[previewKey];
+    if (!saved || Date.now() - saved.createdAt > 5 * 60 * 1000) {
+      throw new Error("预览已过期，请重新预览");
+    }
+    if (saved.fingerprint !== tabFingerprint(tabs) || saved.organizeMode !== organizeMode) {
+      throw new Error("标签页已变化，请重新预览后整理");
+    }
+    grouping = saved.grouping;
+  } else {
+    grouping = await buildGroups(targetTabs, options, existingGroups, eligibleTabs);
+  }
+  const groups = coerceUsefulGroups(normalizeGroups(grouping.groups, targetTabs, existingGroups), targetTabs);
+  if (options.previewOnly) {
+    await previewStorage.set({ [previewKey]: {
+      grouping: { ...grouping, groups }, fingerprint: tabFingerprint(tabs), organizeMode, createdAt: Date.now()
+    } });
+    return {
+      preview: true, groups: groups.map(group => ({
+        title: group.title, count: group.tabIds.length,
+        tabs: group.tabIds.map(id => targetTabs.find(tab => tab.id === id)?.title || "未命名网页")
+      })),
+      source: supportsNativeTabGroups ? grouping.source : "vivaldi", organizeMode,
+      warning: grouping.warning || "", tabCount: eligibleTabs.length
+    };
+  }
+  const latestTabs = await extensionApi.tabs.query({ windowId });
+  if (tabFingerprint(latestTabs) !== tabFingerprint(tabs)) {
+    throw new Error("生成方案期间标签页已变化，请重新预览或整理");
+  }
+  // Consume a preview before the first browser mutation, so it cannot be replayed.
+  await previewStorage.remove(previewKey);
+
+  // Vivaldi does not expose a public WebExtension API for creating its native
+  // tab stacks or workspaces.  When Chromium's tabGroups API is unavailable,
+  // keep every tab in the current window and make each inferred topic a
+  // contiguous block instead.  This is a safe, useful fallback that does not
+  // create windows, close tabs, or pretend that tab stacks were created.
+  if (!supportsNativeTabGroups) {
+    return applyVivaldiCompatibility(groups, eligibleTabs, windowId, organizeMode, skippedTabs.length);
+  }
   const appliedGroups = [];
   const failedGroups = [];
 
   if (organizeMode === "all") {
-    await ungroupTabs(targetTabs);
+    try {
+      await ungroupTabs(targetTabs);
+    } catch (error) {
+      if (isUnsupportedTabGroupsError(error)) {
+        return applyVivaldiCompatibility(groups, eligibleTabs, windowId, organizeMode, skippedTabs.length);
+      }
+      throw error;
+    }
   }
 
   for (const [index, group] of groups.entries()) {
@@ -86,6 +175,9 @@ async function organizeTabs(options = {}) {
       appliedGroups.push(createdGroup);
     } catch (error) {
       failedGroups.push({ title: cleanGroupTitle(group.title), count: tabIds.length, error: error.message });
+      if (isUnsupportedTabGroupsError(error)) {
+        return applyVivaldiCompatibility(groups, eligibleTabs, windowId, organizeMode, skippedTabs.length);
+      }
     }
   }
 
@@ -116,6 +208,60 @@ async function organizeTabs(options = {}) {
       skippedTabCount: skippedTabs.length
     }
   };
+}
+
+async function applyVivaldiCompatibility(groups, eligibleTabs, windowId, organizeMode, skippedTabCount) {
+  const orderedGroups = await arrangeTabsForVivaldi(groups, eligibleTabs, windowId);
+  return {
+    tabCount: eligibleTabs.length,
+    groups: orderedGroups,
+    source: "vivaldi",
+    organizeMode,
+    warning: "Vivaldi 兼容排序：已将同类标签连续排列。Vivaldi 未向扩展开放原生标签栈或工作区的创建接口，因此不会显示 Chrome 式标签组。",
+    debug: {
+      proposedGroupCount: groups.length,
+      failedGroupCount: 0,
+      skippedTabCount
+    }
+  };
+}
+
+async function arrangeTabsForVivaldi(groups, eligibleTabs, windowId) {
+  const tabById = new Map(eligibleTabs.map((tab) => [tab.id, tab]));
+  // Start where the first ordinary page already sits. This preserves pinned
+  // tabs and keeps Vivaldi/extension internal pages before it untouched.
+  let destinationIndex = Math.min(...eligibleTabs.map((tab) => tab.index));
+  const appliedGroups = [];
+
+  for (const group of groups) {
+    const orderedTabIds = group.tabIds
+      .filter((tabId) => tabById.has(tabId))
+      .sort((leftId, rightId) => tabById.get(leftId).index - tabById.get(rightId).index);
+
+    if (!orderedTabIds.length) {
+      continue;
+    }
+
+    for (const tabId of orderedTabIds) {
+      await extensionApi.tabs.move(tabId, {
+        index: destinationIndex,
+        ...(Number.isInteger(windowId) ? { windowId } : {})
+      });
+      destinationIndex += 1;
+    }
+
+    appliedGroups.push({
+      title: cleanGroupTitle(ensureTitleEmoji(group.title)),
+      count: orderedTabIds.length
+    });
+  }
+
+  return appliedGroups;
+}
+
+function isUnsupportedTabGroupsError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return /not implemented|not supported|unsupported|unavailable|tabgroups|tabs\.group/.test(message);
 }
 
 async function buildGroups(tabs, options, existingGroups, allTabs) {
@@ -175,7 +321,9 @@ async function buildAiGroups(tabs, { apiBaseUrl, apiKey, model, instructions, ex
   }));
   const existingGroupList = buildExistingGroupContext(existingGroups, allTabs);
 
+  const deadline = Date.now() + MODEL_TIMEOUT_MS;
   let response = await fetchChatCompletion({
+    deadline,
     apiBaseUrl,
     apiKey,
     model,
@@ -185,6 +333,7 @@ async function buildAiGroups(tabs, { apiBaseUrl, apiKey, model, instructions, ex
 
   if (!response.ok && [400, 404, 422].includes(response.status)) {
     response = await fetchChatCompletion({
+      deadline,
       apiBaseUrl,
       apiKey,
       model,
@@ -198,7 +347,7 @@ async function buildAiGroups(tabs, { apiBaseUrl, apiKey, model, instructions, ex
     throw new Error(`模型接口错误：${response.status}${detail ? ` ${detail}` : ""}`);
   }
 
-  const data = await response.json();
+  const data = response.data;
   const outputText = data.choices?.[0]?.message?.content || "";
   const parsed = JSON.parse(extractJsonObject(outputText));
   return normalizeGroups(parsed.groups, tabs, existingGroups);
@@ -222,7 +371,7 @@ function buildMessages(indexedTabs, instructions, existingGroups) {
   ];
 }
 
-async function fetchChatCompletion({ apiBaseUrl, apiKey, model, messages, useJsonFormat }) {
+async function fetchChatCompletion({ apiBaseUrl, apiKey, model, messages, useJsonFormat, deadline }) {
   const body = {
     model,
     messages
@@ -236,11 +385,13 @@ async function fetchChatCompletion({ apiBaseUrl, apiKey, model, messages, useJso
     body.response_format = { type: "json_object" };
   }
 
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("模型请求超过 12 秒");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), remaining);
 
   try {
-    return await fetch(`${apiBaseUrl}/chat/completions`, {
+    const response = await fetch(`${apiBaseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -249,6 +400,10 @@ async function fetchChatCompletion({ apiBaseUrl, apiKey, model, messages, useJso
       body: JSON.stringify(body),
       signal: controller.signal
     });
+    // Keep the abort timer active while reading the response body as well.
+    const text = await response.text();
+    return { ok: response.ok, status: response.status,
+      data: response.ok ? JSON.parse(text) : null, text: async () => text };
   } catch (error) {
     if (error?.name === "AbortError") {
       throw new Error(`模型请求超过 ${Math.round(MODEL_TIMEOUT_MS / 1000)} 秒`);
@@ -341,7 +496,8 @@ function normalizeGroups(groups, tabs, existingGroups = new Map()) {
   const validTabIds = new Set(tabs.map((tab) => tab.id));
   const seen = new Set();
 
-  return groups
+  return (Array.isArray(groups) ? groups : [])
+    .filter((group) => group && typeof group === "object")
     .map((group) => {
       const parsedExistingGroupId = Number(group.existingGroupId);
       const existingGroupId = Number.isInteger(parsedExistingGroupId) && existingGroups.has(parsedExistingGroupId)
@@ -352,7 +508,7 @@ function normalizeGroups(groups, tabs, existingGroups = new Map()) {
       return {
         title: cleanGroupTitle(existingTitle || ensureTitleEmoji(group.title)),
         existingGroupId,
-        tabIds: [...new Set(group.tabIds || [])]
+        tabIds: [...new Set(Array.isArray(group.tabIds) ? group.tabIds : [])]
           .filter((tabId) => validTabIds.has(tabId))
           .filter((tabId) => {
             if (seen.has(tabId)) {
@@ -414,8 +570,7 @@ function findMatchingExistingGroup(tab, existingGroups) {
     }
 
     if (
-      groupTitle.includes(topic) ||
-      topic.includes(groupTitle) ||
+      (topic !== "网页资料" && (groupTitle.includes(topic) || topic.includes(groupTitle))) ||
       groupTitle.includes(hostBucket) ||
       hostBucket.includes(groupTitle) ||
       host.includes(groupTitle) ||
@@ -429,36 +584,26 @@ function findMatchingExistingGroup(tab, existingGroups) {
 }
 
 function inferChineseTopic(tab) {
-  const host = safeHost(tab.url);
-  const text = `${tab.title || ""} ${tab.url || ""} ${host}`.toLowerCase();
+  const host = safeHost(tab.url).toLowerCase();
+  const text = `${tab.title || ""} ${tab.url || ""}`.toLowerCase();
+  const at = (...domains) => domains.some(domain => host === domain || host.endsWith(`.${domain}`));
 
-  if (/localhost|127\.0\.0\.1|0\.0\.0\.0|:\d{2,5}/.test(text)) {
-    return "本地开发";
-  }
-  if (/github|gitlab|bitbucket|npmjs|stackoverflow|developer|docs\.|api|mdn|vercel|cloudflare/.test(text)) {
-    return "开发资料";
-  }
-  if (/search|google 搜索|bing|baidu|duckduckgo|搜索/.test(text)) {
-    return "搜索资料";
-  }
-  if (/drive\.google|docs\.google|sheets\.google|gmail|calendar\.google|google ai|google/.test(text)) {
-    return "谷歌工具";
-  }
-  if (/linux\.do|v2ex|reddit|forum|community|discourse|论坛|社区/.test(text)) {
-    return "技术社区";
-  }
-  if (/youtube|bilibili|video|mp4|douyin|kuaishou|视频/.test(text)) {
-    return "视频内容";
-  }
-  if (/amazon|taobao|tmall|jd\.com|shop|product|cart|购物|商品/.test(text)) {
-    return "购物资料";
-  }
-  if (/finance|stock|invest|雪球|东方财富|同花顺|股票|投资/.test(text)) {
-    return "投资研究";
-  }
-  if (/notion|yuque|feishu|document|pdf|文档|表格|幻灯片/.test(text)) {
-    return "文档资料";
-  }
+  if (host === "localhost" || host.endsWith(".localhost") || /^(127\.|192\.168\.|10\.)/.test(host) || host === "0.0.0.0" || host === "[::1]") return "本地开发";
+  // Specific services must precede broad title keywords such as docs and video.
+  if (at("chatgpt.com", "openai.com", "claude.ai", "deepseek.com", "gemini.google.com", "grok.com", "perplexity.ai")) return "AI 工具";
+  if (at("docs.google.com", "sheets.google.com", "drive.google.com", "notion.so", "notion.site", "yuque.com", "feishu.cn")) return "文档资料";
+  if (at("gmail.com", "mail.google.com", "calendar.google.com")) return "谷歌工具";
+  if (at("linux.do", "v2ex.com", "reddit.com") || /论坛|社区/.test(text)) return "技术社区";
+  if (at("youtube.com", "youtu.be", "bilibili.com", "douyin.com", "kuaishou.com")) return "视频内容";
+  if (at("taobao.com", "tmall.com", "jd.com", "amazon.com")) return "购物资料";
+  if (at("xueqiu.com", "eastmoney.com", "10jqka.com", "binance.com", "tradingview.com")) return "投资研究";
+  if (at("google.com", "bing.com", "baidu.com", "duckduckgo.com") && /[/?](search|s|q)([/?=]|$)/.test(tab.url || "")) return "搜索资料";
+  if (at("github.com", "gitlab.com", "bitbucket.org", "npmjs.com", "stackoverflow.com", "vercel.com", "cloudflare.com") || /(^|\.)docs\./.test(host) || /developer|开发文档|api文档|mdn/.test(text)) return "开发资料";
+  if (/搜索/.test(text)) return "搜索资料";
+  if (/视频|\.mp4(?:[?#]|$)/.test(text)) return "视频内容";
+  if (/购物|商品|购物车/.test(text)) return "购物资料";
+  if (/finance|stock|invest|股票|投资/.test(text)) return "投资研究";
+  if (/document|\.pdf(?:[?#]|$)|文档|表格|幻灯片/.test(text)) return "文档资料";
 
   return "网页资料";
 }
@@ -475,7 +620,7 @@ function ensureTitleEmoji(title = "") {
 }
 
 function hasLeadingEmoji(value) {
-  return /^\p{Extended_Pictographic}/u.test(String(value).trim());
+  return /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator})/u.test(String(value).trim());
 }
 
 function emojiForTitle(title = "") {
@@ -519,7 +664,7 @@ function normalizeInstructions(value) {
 function normalizeForMatch(value = "") {
   return String(value)
     .toLowerCase()
-    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u200D]/gu, "")
     .replace(/\s+/g, "");
 }
 

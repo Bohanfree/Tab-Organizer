@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Atlas Tab Organizer",
   "description": "Auto-organize browser tabs into useful groups with optional AI instructions.",
-  "version": "0.7.2",
+  "version": "0.9.0",
   "permissions": ["tabs", "tabGroups", "storage"],
   "optional_host_permissions": ["<all_urls>"],
   "action": {

@@ -18,6 +18,7 @@ copy_firefox_files() {
   mkdir -p "$target_dir"
 
   cp "$ROOT_DIR/manifest.firefox.json" "$target_dir/manifest.json"
+  cp -R "$ROOT_DIR/icons" "$target_dir/icons"
   cp "$ROOT_DIR/popup.html" "$target_dir/popup.html"
   cp "$ROOT_DIR/popup.css" "$target_dir/popup.css"
   cp "$ROOT_DIR/popup.js" "$target_dir/popup.js"

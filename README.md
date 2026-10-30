@@ -1,5 +1,7 @@
 # Tab-Organizer
 
+<img src="icons/icon-128.png" alt="Atlas Tab Organizer logo" width="96" height="96" />
+
 一个 Chrome Manifest V3 扩展 MVP，用来模拟 ChatGPT Atlas 的标签自动整理体验：读取当前窗口的标签页，根据本地规则或 OpenAI-compatible 模型生成分组，并调用 Chrome 原生 `tabGroups` API 创建标签组。
 
 ## 功能
@@ -105,7 +107,7 @@ Atlas 的 Auto-organize 可以结合 ChatGPT 的浏览器记忆和用户指令�
 - 整理要求、AI 开关、整理范围会记住选择；整理结果由后台保存，便于关闭弹窗后查看。
 - 生成方案期间标签页变化时，在修改标签前提示重新生成。
 
-更新已解压扩展：在浏览器扩展管理页找到 Atlas Tab Organizer，点击“重新加载”；弹窗标题显示 v0.9.0 即已使用新版。Chrome / Chromium 包只包含运行必需文件；Firefox 包通过 `./scripts/build-firefox.sh` 生成。Firefox XPI 为本地未签名调试包，使用前文的临时载入方式。
+更新已解压扩展：在浏览器扩展管理页找到 Atlas Tab Organizer，点击“重新加载”；弹窗标题显示 v0.9.1 即已使用新版。Chrome / Chromium 包只包含运行必需文件；Firefox 包通过 `./scripts/build-firefox.sh` 生成。Firefox XPI 为本地未签名调试包，使用前文的临时载入方式。
 
 运行逻辑测试：
 
@@ -114,3 +116,7 @@ node --test tests/organizer.test.cjs
 ```
 
 测试覆盖模拟 Chrome / Firefox / Vivaldi API 的预览、应用、标签保护、重复请求、异常模型输出和超时回退；界面使用本地模拟标签完成点击检查。真实浏览器扩展加载和真实模型接口需在使用环境验证。
+
+## v0.9.1
+
+使用提供的蓝色 A 与标签页图案作为扩展 Logo，补齐工具栏、扩展管理页、弹窗和安装包中的图标。原图保存在 `branding/logo-original.png`，运行图标位于 `icons/`。

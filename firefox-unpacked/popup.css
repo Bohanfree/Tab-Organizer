@@ -209,3 +209,6 @@ button:disabled {
 .preview-group li { margin: 4px 0; overflow-wrap: anywhere; }
 textarea { resize: vertical; min-height: 90px; }
 button:focus-visible { outline: 2px solid #236a8f; outline-offset: 2px; }
+
+.brand { display: flex; align-items: center; gap: 10px; }
+.brandLogo { flex: 0 0 40px; object-fit: contain; }
